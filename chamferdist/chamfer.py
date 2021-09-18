@@ -28,6 +28,7 @@ class ChamferDistance(torch.nn.Module):
         bidirectional: Optional[bool] = False,
         reverse: Optional[bool] = False,
         reduction: Optional[str] = "mean",
+        K: Optional[int] = 1
     ):
 
         if not isinstance(source_cloud, torch.Tensor):
@@ -71,15 +72,15 @@ class ChamferDistance(torch.nn.Module):
                 "Both bidirectional and reverse set to True. "
                 "bidirectional behavior takes precedence."
             )
-        if reduction != "sum" and reduction != "mean":
-            raise ValueError('Reduction must either be "sum" or "mean".')
+        if reduction != "sum" and reduction != "mean" and reduction != "none":
+            raise ValueError('Reduction must either be "sum", "mean", "none".')
 
         source_nn = knn_points(
             source_cloud,
             target_cloud,
             lengths1=lengths_source,
             lengths2=lengths_target,
-            K=1,
+            K=K,
         )
 
         target_nn = None
@@ -89,19 +90,25 @@ class ChamferDistance(torch.nn.Module):
                 source_cloud,
                 lengths1=lengths_target,
                 lengths2=lengths_source,
-                K=1,
+                K=K,
             )
 
         # Forward Chamfer distance (batchsize_source, lengths_source)
-        chamfer_forward = source_nn.dists[..., 0]
+        chamfer_forward = source_nn.dists.sum(dim=-1)
         chamfer_backward = None
         if reverse or bidirectional:
             # Backward Chamfer distance (batchsize_source, lengths_source)
-            chamfer_backward = target_nn.dists[..., 0]
+            chamfer_backward = target_nn.dists.sum(dim=-1)
 
-        chamfer_forward = chamfer_forward.sum(1)  # (batchsize_source,)
+        sorted_chamfer_forward, _ = torch.sort(chamfer_forward)
+        chamfer_forward = \
+            torch.linspace(0.01, 1, chamfer_forward.shape[1]).to(chamfer_forward.device)*sorted_chamfer_forward
+        chamfer_forward = chamfer_forward.sum(1)/K  # (batchsize_source,)
         if reverse or bidirectional:
-            chamfer_backward = chamfer_backward.sum(1)  # (batchsize_target,)
+            sorted_chamfer_backward, _ = torch.sort(chamfer_backward)
+            chamfer_backward = \
+                torch.linspace(0.01, 1, chamfer_backward.shape[1]).to(chamfer_backward.device)*sorted_chamfer_backward
+            chamfer_backward = chamfer_backward.sum(1)/K  # (batchsize_target,)
 
         if reduction == "sum":
             chamfer_forward = chamfer_forward.sum()  # (1,)
